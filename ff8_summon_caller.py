@@ -241,7 +241,7 @@ class Mem:
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("FF8 Summon Caller - by AxlRose")
+        self.title(f"FF8 Summon Caller v{APP_VERSION} - by AxlRose")
         self.geometry("560x820")
         self.minsize(520, 720)
 
