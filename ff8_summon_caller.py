@@ -2,15 +2,15 @@
 """
 ff8_summon_caller.py
 
-Summon-caller for FF8 (OG PC build: 2000 / 2013, FF8_EN.exe, with FFNx).
+Summon-caller for FF8 (OG PC builds and the Steam/GOG Remaster).
 Companion to the battle teleport tool.
 
 How it works
 ------------
 FF8 fills a small "pending action" buffer when you pick a command in the
-battle menu. This tool writes an entry into that buffer (0x1D28D44), so the
-game runs the action on the chosen character's turn, exactly as if you had
-selected it. A button = "that character summons X".
+battle menu. This tool writes an entry into that buffer (logical address
+0x1D28D44), so the game runs the action on the chosen character's turn,
+exactly as if you had selected it. A button = "that character summons X".
 
     - GF buttons use the GF command (command_id 0x03) with the kernel GF id
       (0x40..0x4F = the 16 junctionable GFs). Verified in the exe. Each attacker
@@ -26,15 +26,16 @@ item system and the random-appearance code, which needs a different hook.
 
 Use it
 ------
-1. Start FF8 (OG PC build) with FFNx, get into a battle.
+1. Start FF8 (OG PC build with FFNx, or Remastered) and get into a battle.
 2. Attach to FF8.
 3. Pick the attacker slot (0, 1 or 2 = the party member, top to bottom).
 4. When it is that character's turn (their command menu is up), click a summon.
 
 Notes
 -----
-- OG PC build only (image base 0x400000). It refuses to write on any other
-  build (e.g. the Remaster), so it can't crash the wrong exe.
+- OG PC builds use the original absolute addresses (image base 0x400000).
+- Remastered uses FFVIII_EFIGS.dll's page table to translate those same
+    logical addresses into the live game-state pages.
 - The pending entry is consumed on the character's turn. If nothing happens,
   it usually was not that character's turn yet, click again when the menu is up.
 - Live memory writes need pymem and are Windows-only.
@@ -50,7 +51,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
 
-APP_VERSION = "2026.0927"   # release version (YYYY.MMDD); the GitHub build reads it from here
+APP_VERSION = "2026.1001"   # release version (YYYY.MMDD); the GitHub build reads it from here
 
 
 def get_exe_dir():
@@ -61,13 +62,14 @@ def get_exe_dir():
 
 
 # ---------------------------------------------------------------- addresses
-# FF8 OG PC (FF8_EN.exe) is a non-relocatable exe (loads at 0x400000), so this
-# is an absolute virtual address, not a module-relative offset.
+# These are classic FF8 logical addresses. OG PC uses them directly; Remastered
+# translates them through the EFIGS DLL's game-memory page table.
 PENDING_BUFFER      = 0x1D28D44   # battle pending-action buffer
 ENTRY_SIZE          = 8           # one action entry is 8 bytes
 SLOT_STRIDE         = 0x18        # each attacker slot owns a 3-entry (0x18) block
 IMAGE_BASE_EXPECTED = 0x400000
-PROC_NAMES          = ["FF8.exe", "FF8_EN.exe"]
+REMASTERED_PAGE_TABLE_RVA = 0x188EDD0  # dword_1188EDD0 in FFVIII_EFIGS.dll
+PROC_NAMES          = ["FF8.exe", "FF8_EN.exe", "FFVIII.exe"]
 
 # pending entry layout (little-endian):
 #   <H target_mask><B attacker_slot><B command_id><B command_arg><B pad><B pad><B active>
@@ -114,11 +116,14 @@ class Mem:
         self.log = log
         self.base = None
         self.name = None
+        self.is_remastered = False
+        self.page_table_address = None
 
     def attached(self):
         return self.pm is not None
 
     def attach(self):
+        self.detach()   # start clean, nothing from an earlier attach carries over
         try:
             import pymem
         except ImportError:
@@ -144,29 +149,64 @@ class Mem:
         except Exception:
             self.base = None
 
+        if self.name.lower() == "ffviii.exe":
+            try:
+                from pymem.process import module_from_name
+                module = module_from_name(self.pm.process_handle, "FFVIII_EFIGS.dll")
+                if module is None:
+                    raise RuntimeError("FFVIII_EFIGS.dll is not loaded")
+                self.page_table_address = module.lpBaseOfDll + REMASTERED_PAGE_TABLE_RVA
+                self.is_remastered = True
+            except Exception as e:
+                self.pm = None
+                self.name = None
+                self.log(f"Could not locate FFVIII_EFIGS.dll page table: {e}")
+                return False
+
         self.log(f"Attached: {self.name} (PID {self.pm.process_id}).")
-        if self.base not in (None, IMAGE_BASE_EXPECTED):
+        if self.is_remastered:
+            self.log("Remastered detected; game addresses will be resolved through FFVIII_EFIGS.dll.")
+        elif self.base not in (None, IMAGE_BASE_EXPECTED):
             self.log(f"WARNING: image base is 0x{self.base:X}, expected 0x{IMAGE_BASE_EXPECTED:X}. "
-                     "This is not the OG PC build; writes are disabled to avoid a crash.")
+                     "This is not a supported OG PC build; writes are disabled.")
         return True
 
     def detach(self):
         self.pm = None
         self.base = None
         self.name = None
+        self.is_remastered = False
+        self.page_table_address = None
 
     def can_write(self):
-        return self.pm is not None and self.base in (None, IMAGE_BASE_EXPECTED)
+        if self.pm is None:
+            return False
+        if self.is_remastered:
+            return self.page_table_address is not None
+        return self.base in (None, IMAGE_BASE_EXPECTED)
+
+    def resolve_address(self, address):
+        if not self.is_remastered:
+            return address
+
+        page_index = address >> 12
+        try:
+            page_base = self.pm.read_uint(self.page_table_address + page_index * 4)
+        except Exception as e:
+            raise RuntimeError(f"Could not read Remastered page table: {e}") from e
+        if page_base == 0:
+            raise RuntimeError(f"Remastered address page 0x{page_index:X} is not mapped.")
+        return page_base + (address & 0xFFF)
 
     def write_byte(self, addr, value):
         if not self.pm:
             self.log("Attach to FF8 first.")
             return False
         if not self.can_write():
-            self.log("Writes disabled: this is not the OG PC build (image base 0x400000).")
+            self.log("Writes disabled: unsupported game executable or image base.")
             return False
         try:
-            self.pm.write_bytes(addr, bytes([value & 0xFF]), 1)
+            self.pm.write_bytes(self.resolve_address(addr), bytes([value & 0xFF]), 1)
             return True
         except Exception as e:
             self.log(f"Write failed: {e}")
@@ -177,12 +217,12 @@ class Mem:
             self.log("Attach to FF8 first.")
             return False
         if not self.can_write():
-            self.log("Writes disabled: this is not the OG PC build (image base 0x400000).")
+            self.log("Writes disabled: unsupported game executable or image base.")
             return False
         entry = struct.pack("<HBBBBBB", target_mask & 0xFFFF, slot & 0xFF,
                             command_id & 0xFF, command_arg & 0xFF, 0, 0, 1)
-        addr = PENDING_BUFFER + slot * SLOT_STRIDE
         try:
+            addr = self.resolve_address(PENDING_BUFFER + slot * SLOT_STRIDE)
             self.pm.write_bytes(addr, entry, len(entry))
             return True
         except Exception as e:
@@ -274,7 +314,7 @@ class App(tk.Tk):
         self.logbox.configure(state="disabled")
 
         ttk.Label(self, padding=(8, 0), foreground="#666",
-                  text="Click a summon when it is that slot's turn (command menu up).").pack(fill="x")
+                  text="Click a summon when it is that slot's turn (command menu up). Supports OG PC and Remastered.").pack(fill="x")
 
     # ---- helpers
     def _log(self, msg):
@@ -303,8 +343,10 @@ class App(tk.Tk):
     def _summon_boko(self, name, tier):
         slot = self.slot_var.get()
         # make Boko available (low bit on, clear the rest) and set the tier, then summon
-        self.mem.write_byte(BOKO_AVAIL_ADDR, 1)
-        self.mem.write_byte(BOKO_TIER_ADDR, tier)
+        if not self.mem.write_byte(BOKO_AVAIL_ADDR, 1):
+            return
+        if not self.mem.write_byte(BOKO_TIER_ADDR, tier):
+            return
         if self.mem.write_pending(slot, CMD_ITEM, BOKO_ITEM_ID):
             self._log(f"Queued Boko {name} (tier {tier}) from slot {slot}. Fires on that character's turn.")
 

@@ -10,7 +10,7 @@ It's a testing tool for modders, not a trainer. When you click a summon, it writ
 
 It pairs well with [FF8 Battle Teleport](https://github.com/AxlRose-RX/FF8-Battle-Teleport): jump into the battle you want, then call the summon you want to test.
 
-It has only been tested with FFNx and the Junction VIII mod manager, on Final Fantasy VIII Remastered and the original 2013 Steam version, and those are the only setups it supports.
+It has been tested with FFNx and the Junction VIII mod manager, on Final Fantasy VIII Remastered and the original 2013 Steam version, and with Final Fantasy VIII Remastered launched on its own, without Junction VIII. Those are the only setups it supports.
 
 ## Download
 
@@ -20,7 +20,7 @@ Because it writes to the game's memory, some antivirus programs may flag it. The
 
 ## How to use
 
-1. Start the game through Junction VIII and get into a battle.
+1. Start the game through Junction VIII (or just launch the Remastered version on its own) and get into a battle.
 2. Click **Attach to FF8**.
 3. Pick who casts it: **Slot 0**, **1** or **2** are your party members, top to bottom.
 4. When it's that character's turn and their command menu is up, click a summon.
@@ -33,6 +33,6 @@ Download **Source code (zip)** from any release, install [Python 3](https://www.
 
 ## Credits
 
-Made by AxlRose. Claude (Anthropic's AI) helped write the code.
+Made by AxlRose. Claude (Anthropic's AI) helped write the code. [TrueOdin](https://github.com/julianxhokaxhiu) added support for the Remastered version without Junction VIII.
 
 Questions and bug reports: [Tsunamods Discord](https://discord.com/invite/7Rsvsewghz)
