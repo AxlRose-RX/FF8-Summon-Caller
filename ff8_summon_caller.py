@@ -51,6 +51,8 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
 
+APP_VERSION = "2026.1001"   # release version (YYYY.MMDD); the GitHub build reads it from here
+
 
 def get_exe_dir():
     """Folder of the running .exe (when frozen by PyInstaller) or of this script."""
@@ -121,6 +123,7 @@ class Mem:
         return self.pm is not None
 
     def attach(self):
+        self.detach()   # start clean, nothing from an earlier attach carries over
         try:
             import pymem
         except ImportError:
@@ -218,19 +221,9 @@ class Mem:
             return False
         entry = struct.pack("<HBBBBBB", target_mask & 0xFFFF, slot & 0xFF,
                             command_id & 0xFF, command_arg & 0xFF, 0, 0, 1)
-        addr = self.resolve_address(PENDING_BUFFER + slot * SLOT_STRIDE)
         try:
+            addr = self.resolve_address(PENDING_BUFFER + slot * SLOT_STRIDE)
             self.pm.write_bytes(addr, entry, len(entry))
-            return True
-        except Exception as e:
-            self.log(f"Write failed: {e}")
-            return False
-
-        if not self.can_write():
-            self.log("Writes disabled: this is not the OG PC build (image base 0x400000).")
-            return False
-        try:
-            self.pm.write_bytes(addr, bytes([value & 0xFF]), 1)
             return True
         except Exception as e:
             self.log(f"Write failed: {e}")
